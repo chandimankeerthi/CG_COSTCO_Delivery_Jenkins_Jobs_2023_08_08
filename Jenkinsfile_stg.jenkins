@@ -1,0 +1,407 @@
+properties([[$class: 'JiraProjectProperty'], gitLabConnection(gitLabConnection: '', jobCredentialId: ''), [$class: 'RebuildSettings', autoRebuild: false, rebuildDisabled: false],
+
+    parameters([
+
+        separator(name: "0", sectionHeader: "Select Deployments" , separatorStyle: """border-width:5; background:#77a0e6; padding:3px"""),
+
+        booleanParam('include_b2c_proxy'),
+
+        booleanParam('include_batches'),
+
+        booleanParam('include_docs'),
+
+        booleanParam('include_extension_api'),
+
+        booleanParam('include_loading'),
+
+        booleanParam('include_post_sales'),
+
+        booleanParam('include_reservation'),
+
+        booleanParam('include_search'),
+
+        booleanParam('include_utility'),
+
+        separator(name: "0", sectionHeader: "Select Other Kubernetes Objects" , separatorStyle: """border-width:5; background:#77a0e6; padding:3px"""),
+
+        booleanParam('include_namespace'),
+
+        booleanParam('include_hpa'),
+        
+        booleanParam('include_services'),
+
+        booleanParam('include_ingress'),
+
+        booleanParam('include_secrets'),
+
+        booleanParam('include_configmaps'),
+
+        booleanParam('include_storage_mounts'),
+
+        separator(name: "0", sectionHeader: "Initialize Terraform State" , separatorStyle: """border-width:5; background:#77a0e6; padding:3px"""),
+
+        booleanParam('terraform_state_init')
+
+    ]),
+
+throttleJobProperty(categories: [], limitOneJobWithMatchingParams: false, maxConcurrentPerNode: 0, maxConcurrentTotal: 0, paramsToUseForLimit: '', throttleEnabled: false, throttleOption: 'project')
+])
+
+def listServiceTags(String service) {
+    sh """
+        cat images.txt | grep ${service} | grep -v unknown | sed -E 's/.*?://' > output.txt
+    """
+
+    def tags = readFile('output.txt').trim()
+
+    return tags
+}
+
+def listImageTags() {
+    sh """
+        /home/jenkins/bin/oci raw-request --profile DEFAULT --target-uri https://artifacts.uk-london-1.oci.oraclecloud.com/20160918/container/images?compartmentId=ocid1.compartment.oc1..aaaaaaaamcheklp4ubkpmez6diiaqzaqvd2p3ppdnaatrtcidmqtcagwjdea --http-method GET | jq -r '.data.items[].displayName' > images.txt
+    """
+}
+
+node {
+    try {
+        environment {
+            TF_IN_AUTOMATION = 'true'
+        }
+
+        stage('Starting Slave Agent') {
+            node('slave_1') {
+                sh '''
+                    #/var/lib/jenkins/bin/oci compute instance action --action START --instance-id ocid1.instance.oc1.uk-london-1.anwgiljreuluklycei6lczmewbuxdzpcuhbkdppz5y2c62nhq5jygev3yo2a --config-file /var/lib/jenkins/.oci/config --profile COSTCO --wait-for-state RUNNING
+                '''
+            }
+        }
+
+        stage('Get Release Tags') {
+            node('costco-stg-slave') {
+                listImageTags()
+
+                def parameterArray = []
+
+                if (params.include_b2c_proxy) {
+                    def b2c_proxy_service_tags = listServiceTags('b2c-proxy')
+                    parameterArray.add([$class: 'ChoiceParameterDefinition', choices: b2c_proxy_service_tags, description: '', name: 'b2c_release_tag'])
+                }
+
+                if (params.include_batches) {
+                    def batches_service_tags = listServiceTags('batches')
+                    parameterArray.add([$class: 'ChoiceParameterDefinition', choices: batches_service_tags, description: '', name: 'batches_release_tag'])
+                }
+
+                if (params.include_docs) {
+                    def docs_service_tags = listServiceTags('docs')
+                    parameterArray.add([$class: 'ChoiceParameterDefinition', choices: docs_service_tags, description: '', name: 'docs_release_tag'])
+                }
+
+                if (params.include_extension_api) {
+                    def extension_api_service_tags = listServiceTags('extension-api')
+                    parameterArray.add([$class: 'ChoiceParameterDefinition', choices: extension_api_service_tags, description: '', name: 'extension_api_release_tag'])
+                }
+
+                if (params.include_loading) {
+                    def loading_service_tags = listServiceTags('loading')
+                    parameterArray.add([$class: 'ChoiceParameterDefinition', choices: loading_service_tags, description: '', name: 'loading_release_tag'])
+                }
+
+                if (params.include_post_sales) {
+                    def post_sales_service_tags = listServiceTags('post-sales')
+                    parameterArray.add([$class: 'ChoiceParameterDefinition', choices: post_sales_service_tags, description: '', name: 'post_sales_release_tag'])
+                }
+
+                if (params.include_reservation) {
+                    def reservation_service_tags = listServiceTags('reservation')
+                    parameterArray.add([$class: 'ChoiceParameterDefinition', choices: reservation_service_tags, description: '', name: 'reservation_release_tag'])
+                }
+
+                if (params.include_search) {
+                    def search_service_tags = listServiceTags('search')
+                    parameterArray.add([$class: 'ChoiceParameterDefinition', choices: search_service_tags, description: '', name: 'search_release_tag'])
+                }
+
+                if (params.include_utility) {
+                    def utility_service_tags = listServiceTags('utility')
+                    parameterArray.add([$class: 'ChoiceParameterDefinition', choices: utility_service_tags, description: '', name: 'utility_release_tag'])
+                }
+
+                choices = input( id: 'userInput', message: 'Release Tags', parameters: parameterArray)
+
+                if (params.include_b2c_proxy) {
+                    try {
+                        env.b2c_release_tag = choices['b2c_release_tag']
+                    }
+                    catch (error) {
+                        env.b2c_release_tag = choices
+                    }
+                }
+
+                if (params.include_batches) {
+                    try {
+                        env.batches_release_tag = choices['batches_release_tag']
+                    }
+                    catch (error) {
+                        env.batches_release_tag = choices
+                    }
+                }
+
+                if (params.include_docs) {
+                    try {
+                        env.docs_release_tag = choices['docs_release_tag']
+                    }
+                    catch (error) {
+                        env.docs_release_tag = choices
+                    }
+                }
+
+                if (params.include_extension_api) {
+                    try {
+                        env.extension_api_release_tag = choices['extension_api_release_tag']
+                    }
+                    catch (error) {
+                        env.extension_api_release_tag = choices
+                    }
+                }
+
+                if (params.include_loading) {
+                    try {
+                        env.loading_release_tag = choices['loading_release_tag']
+                    }
+                    catch (error) {
+                        env.loading_release_tag = choices
+                    }
+                }
+
+                if (params.include_post_sales) {
+                    try {
+                        env.post_sales_release_tag = choices['post_sales_release_tag']
+                    }
+                    catch (error) {
+                        env.post_sales_release_tag = choices
+                    }
+                }
+
+                if (params.include_reservation) {
+                    try {
+                        env.reservation_release_tag = choices['reservation_release_tag']
+                    }
+                    catch (error) {
+                        env.reservation_release_tag = choices
+                    }
+                }
+
+                if (params.include_search) {
+                    try {
+                        env.search_release_tag = choices['search_release_tag']
+                    }
+                    catch (error) {
+                        env.search_release_tag = choices
+                    }
+                }
+
+                if (params.include_utility) {
+                    try {
+                        env.utility_release_tag = choices['utility_release_tag']
+                    }
+                    catch (error) {
+                        env.utility_release_tag = choices
+                    }
+                }
+            }
+        }
+
+
+        stage('Plan') {
+            node('costco-stg-slave') {
+
+                checkout scm
+
+                sh '/home/jenkins/bin/oci ce cluster create-kubeconfig --cluster-id ocid1.cluster.oc1.uk-london-1.aaaaaaaatj2miv2oqwxl3d2z7gt2l4ixfgopkvwsdu2wp2zwqceaaohevujq --file $HOME/.kube/config --region uk-london-1 --token-version 2.0.0  --kube-endpoint PRIVATE_ENDPOINT'
+
+                dir('stg/terraform') {
+                    try {
+                        sh '''#!/bin/bash
+                                terraform init
+                            '''
+                    } catch (error) {
+                        echo 'Terraform init failed, retrying the initialization'
+                        retry(2) {
+                            sh '''#!/bin/bash
+                                terraform init
+                            '''
+                        }
+                    }
+                }
+
+                if(params.terraform_state_init) {
+
+                    dir('stg/terraform') {
+
+                        sh '''
+                            #!/bin/bash
+
+                            rm -rf terraform.tfstate
+
+                            terraform import module.b2c-proxy.kubernetes_deployment.deployment       costco-stg/costco-stg-b2c-proxy
+                            terraform import module.batches.kubernetes_deployment.deployment         costco-stg/costco-stg-batches
+                            terraform import module.docs.kubernetes_deployment.deployment            costco-stg/costco-stg-docs
+                            terraform import module.extension-api.kubernetes_deployment.deployment   costco-stg/costco-stg-extension-api
+                            terraform import module.loading.kubernetes_deployment.deployment         costco-stg/costco-stg-loading
+                            terraform import module.post-sales.kubernetes_deployment.deployment      costco-stg/costco-stg-post-sales
+                            terraform import module.reservation.kubernetes_deployment.deployment     costco-stg/costco-stg-reservation
+                            terraform import module.search.kubernetes_deployment.deployment          costco-stg/costco-stg-search
+                            terraform import module.utility.kubernetes_deployment.deployment          costco-stg/costco-stg-utility
+
+
+                        '''
+                    
+                    }
+                }
+
+                dir('stg/terraform') {
+
+                    sh '''#!/bin/bash
+
+                        if $include_b2c_proxy; then
+                            terraform plan   -target module.b2c-proxy -var b2c_proxy_tag=${b2c_release_tag} -no-color
+                        fi
+
+                        if $include_batches; then
+                            terraform plan   -target module.batches -var batches_tag=${batches_release_tag} -no-color
+                        fi
+
+                        if $include_docs; then
+                            terraform plan   -target module.docs -var docs_tag=${docs_release_tag} -no-color
+                        fi
+
+                        if $include_extension_api; then
+                            terraform plan   -target module.extension-api -var extension_api_tag=${extension_api_release_tag} -no-color
+                        fi
+
+                        if $include_loading; then
+                            terraform plan   -target module.loading -var loading_tag=${loading_release_tag} -no-color
+                        fi
+
+                        if $include_post_sales; then
+                            terraform plan   -target module.post-sales -var post_sales_tag=${post_sales_release_tag} -no-color
+                        fi
+
+                        if $include_reservation; then
+                            terraform plan   -target module.reservation -var reservation_tag=${reservation_release_tag} -no-color
+                        fi
+
+                        if $include_search; then
+                            terraform plan   -target module.search -var search_tag=${search_release_tag} -no-color
+                        fi
+
+                        if $include_utility; then
+                            terraform plan   -target module.utility -var utility_tag=${utility_release_tag} -no-color
+                        fi
+
+                        '''
+                }
+            }
+        }
+
+        stage('Approval') {
+            script {
+                def deploymentApproval = input id: 'Deploy', message: 'Deploy to STG?', submitter: 'c899079c-18e2-45d8-952d-a51625f4717d'
+            }
+        }
+
+        stage ('Deployment') {
+            node('costco-stg-slave') {
+                sh '/home/jenkins/bin/oci ce cluster create-kubeconfig --cluster-id ocid1.cluster.oc1.uk-london-1.aaaaaaaatj2miv2oqwxl3d2z7gt2l4ixfgopkvwsdu2wp2zwqceaaohevujq --file $HOME/.kube/config --region uk-london-1 --token-version 2.0.0  --kube-endpoint PRIVATE_ENDPOINT'
+
+                dir('stg') {
+
+                    if (params.include_namespace) {
+                        sh 'kubectl apply -f namespace/'
+                    }
+
+                    if (params.include_hpa) {
+                        sh 'kubectl apply -f hpa/'
+                    }                    
+                    
+                    if (params.include_services) {
+                        sh 'kubectl apply -f service/'
+                    }
+
+                    if (params.include_ingress) {
+                        sh 'kubectl apply -f ingress-manifests/'
+                    }
+
+                    if (params.include_secrets) {
+                        sh 'kubectl apply -f secrets/'
+                    }
+
+                    if (params.include_configmaps) {
+                        sh 'kubectl apply -f configmaps/'
+                    }
+
+                    if (params.include_storage_mounts) {
+                        sh 'kubectl apply -f storage-mount-manifests/'
+                    }
+                }
+
+                dir('stg/terraform') {
+                    sh '''#!/bin/bash
+
+                        if $include_b2c_proxy; then
+                            terraform apply   -target module.b2c-proxy -var b2c_proxy_tag=${b2c_release_tag} -no-color -auto-approve
+                        fi
+
+                        if $include_batches; then
+                            terraform apply   -target module.batches -var batches_tag=${batches_release_tag} -no-color -auto-approve
+                        fi
+
+                        if $include_docs; then
+                            terraform apply   -target module.docs -var docs_tag=${docs_release_tag} -no-color -auto-approve
+                        fi
+
+                        if $include_extension_api; then
+                            terraform apply   -target module.extension-api -var extension_api_tag=${extension_api_release_tag} -no-color -auto-approve
+                        fi
+
+                        if $include_loading; then
+                            terraform apply   -target module.loading -var loading_tag=${loading_release_tag} -no-color -auto-approve
+                        fi
+
+                        if $include_post_sales; then
+                            terraform apply   -target module.post-sales -var post_sales_tag=${post_sales_release_tag} -no-color -auto-approve
+                        fi
+
+                        if $include_reservation; then
+                            terraform apply   -target module.reservation -var reservation_tag=${reservation_release_tag} -no-color -auto-approve
+                        fi
+
+                        if $include_search; then
+                            terraform apply   -target module.search -var search_tag=${search_release_tag} -no-color -auto-approve
+                        fi
+
+                        if $include_utility; then
+                            terraform apply   -target module.utility -var utility_tag=${utility_release_tag} -no-color -auto-approve
+                        fi
+
+                        '''
+                }
+            }
+        }
+
+    } catch (e) {
+        // fail the build if an exception is thrown
+        currentBuild.result = 'FAILED'
+        throw e
+    } finally {
+        stage('Stopping Slave Agent') {
+            node('slave_1') {
+                sh '''
+                    #/var/lib/jenkins/bin/oci compute instance action --action STOP --instance-id ocid1.instance.oc1.uk-london-1.anwgiljreuluklycei6lczmewbuxdzpcuhbkdppz5y2c62nhq5jygev3yo2a --config-file /var/lib/jenkins/.oci/config --profile COSTCO --wait-for-state STOPPED
+                '''
+            }
+        }
+    }
+}
